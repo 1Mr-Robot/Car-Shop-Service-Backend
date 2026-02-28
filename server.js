@@ -14,7 +14,7 @@ app.get("/api/test", async (req, res) => {
     try {
         const result = await pool.query("SELECT NOW()");
         res.json({
-            message: "Conexion a la base de datos exitosa! 🚀",
+            message: "Conexion a la base de datos exitosa por quinta vez! 🚀",
             time: result.rows[0].now
         });
     } catch (err) {
