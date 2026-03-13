@@ -4,6 +4,7 @@ const pool = require("./db");
 require("dotenv").config();
 
 const authRoutes = require("./routes/authRoutes"); 
+const ordenRoutes = require("./routes/ordenRoutes");
 
 const app = express();
 
@@ -26,9 +27,8 @@ app.get("/api/test", async (req, res) => {
 });
 
 // Route Middlewares
-// Cualquier solicitud que comience con /api/auth será gestionada por authRoutes
 app.use("/api/auth", authRoutes);
-
+app.use("/api/v1/ordenes", ordenRoutes); 
 
 const PORT = process.env.PORT || 3000;
 
