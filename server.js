@@ -5,6 +5,7 @@ require("dotenv").config();
 
 const authRoutes = require("./routes/authRoutes"); 
 const ordenRoutes = require("./routes/ordenRoutes");
+const authenticateToken = require("./middleware/authMiddleware");
 
 const app = express();
 
@@ -27,8 +28,10 @@ app.get("/api/test", async (req, res) => {
 });
 
 // Route Middlewares
+// Rutas Públicas (No requieren token)
 app.use("/api/auth", authRoutes);
-app.use("/api/v1/ordenes", ordenRoutes); 
+// Rutas Privadas
+app.use("/api/v1/ordenes", authenticateToken, ordenRoutes); 
 
 const PORT = process.env.PORT || 3000;
 
