@@ -4,12 +4,13 @@ const pool = require("../db");
 /**
  * GET /api/v1/ordenes
  * Obtiene órdenes filtradas, ordenadas y paginadas.
- * Da formato exacto al JSON esperado por el Frontend.
+ * Implementa RBAC (Role-Based Access Control) con req.user
  */
 const getOrdenes = async (req, res) => {
     try {
-        // 1. Extraer Query Parameters (Filtros, Ordenamiento y Paginación)
-        const { mecanico_id, estatus_servicio, sort, limit, page } = req.query;
+        // 1. Extraer Query Parameters (Ignoramos mecanico_id por seguridad, usaremos req.user)
+        const { estatus_servicio, sort, limit, page, mecanico_id } = req.query;
+        const usuarioActual = req.user; // Inyectado por authMiddleware
 
         // Configuraciones por defecto para Paginación
         const limitNum = parseInt(limit) || 10;
@@ -17,6 +18,7 @@ const getOrdenes = async (req, res) => {
         const offset = (pageNum - 1) * limitNum;
 
         // 2. Construcción Dinámica de la Consulta SQL
+        // SE AÑADIÓ: Un JOIN a usuario 'm' para obtener mechanicName (Requerido por Frontend para Recepcionista)
         let query = `
             SELECT 
                 o.id::TEXT,
@@ -26,11 +28,11 @@ const getOrdenes = async (req, res) => {
                 v.matricula AS "vehiclePlate",
                 v.color AS "vehicleColor",
                 c.nombre || ' ' || c.apellido_paterno AS "ownerName",
+                m.nombre || ' ' || m.apellido_paterno AS "mechanicName", 
                 o.kilometraje || ' km' AS "vehicleMileage",
                 TO_CHAR(o.fecha_inicio, 'HH12:MI AM') AS "since",
                 TO_CHAR(o.fecha_inicio, 'DD/MM/YYYY, HH12:MI AM') AS "time",
                 o.notas_cliente AS "notes",
-                -- Magia de Postgres: Anidamos los servicios como un arreglo de objetos JSON
                 COALESCE((
                     SELECT json_agg(
                         json_build_object(
@@ -46,20 +48,35 @@ const getOrdenes = async (req, res) => {
             FROM orden o
             JOIN vehiculo v ON o.id_vehiculo = v.id
             JOIN cliente c ON v.id_cliente = c.id
+            JOIN usuario m ON o.id_mecanico = m.id
             WHERE 1=1
         `;
 
         const queryParams = [];
         let paramIndex = 1;
 
-        // Filtro: Mecánico (Soporta si envían el Firebase UID)
-        if (mecanico_id) {
-            query += ` AND o.id_mecanico = (SELECT id FROM usuario WHERE firebase_uid = $${paramIndex})`;
-            queryParams.push(mecanico_id);
+        // ==========================================
+        // 3. CAPA DE SEGURIDAD RBAC (Role-Based Access Control)
+        // ==========================================
+        if (usuarioActual.rol === 'Mecánico') {
+            // Regla Estricta: Un mecánico SOLO ve sus propias órdenes. 
+            // Usamos el ID interno de Postgres que sacamos del middleware de forma segura.
+            query += ` AND o.id_mecanico = $${paramIndex}`;
+            queryParams.push(usuarioActual.id);
             paramIndex++;
+        } else if (usuarioActual.rol === 'Recepcionista') {
+            // Regla Administrador: Ve todo. 
+            // Opcional: Si el recepcionista quiere filtrar por un mecánico en particular desde la UI
+            if (mecanico_id) {
+                query += ` AND m.firebase_uid = $${paramIndex}`;
+                queryParams.push(mecanico_id);
+                paramIndex++;
+            }
         }
 
-        // Filtro: Estatus de los servicios de la orden (Usa EXISTS para evaluar sub-tablas)
+        // ==========================================
+        // 4. Filtros Generales
+        // ==========================================
         if (estatus_servicio) {
             query += ` AND EXISTS (
                 SELECT 1 FROM orden_servicio os2 
@@ -75,24 +92,18 @@ const getOrdenes = async (req, res) => {
         } else if (sort === 'fecha_fin_desc') {
             query += ` ORDER BY o.fecha_fin DESC`;
         } else {
-            query += ` ORDER BY o.fecha_inicio DESC`; // Por defecto, lo más reciente primero
+            query += ` ORDER BY o.fecha_inicio DESC`; 
         }
 
         // Paginación (Limit & Offset)
         query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
         queryParams.push(limitNum, offset);
 
-        // 3. Ejecutar la consulta
         const result = await pool.query(query, queryParams);
 
-        // 4. Enviar respuesta exitosa (200 OK)
         res.status(200).json({
             data: result.rows,
-            meta: {
-                page: pageNum,
-                limit: limitNum,
-                count: result.rows.length
-            }
+            meta: { page: pageNum, limit: limitNum, count: result.rows.length }
         });
 
     } catch (err) {
@@ -102,15 +113,30 @@ const getOrdenes = async (req, res) => {
 };
 
 /**
+ * Función auxiliar de seguridad: Verifica si un mecánico tiene permiso para modificar esta orden
+ */
+const verifyOrderOwnership = async (ordenId, usuarioActual) => {
+    if (usuarioActual.rol === 'Recepcionista') return true; // El admin puede tocar todo
+    
+    const query = `SELECT id FROM orden WHERE id = $1 AND id_mecanico = $2`;
+    const result = await pool.query(query, [ordenId, usuarioActual.id]);
+    return result.rowCount > 0; // true si es suya, false si intenta hackear/tocar otra
+};
+
+/**
  * PATCH /api/v1/ordenes/:id/servicios/:servicioId
- * Actualiza parcialmente el estatus de un servicio (Idempotente).
  */
 const updateServiceStatus = async (req, res) => {
     try {
         const { id, servicioId } = req.params;
         const { estatus } = req.body;
 
-        // Validamos que el estatus sea válido según el CHECK constraint de la BD
+        // Validar propiedad de la orden
+        const isOwner = await verifyOrderOwnership(id, req.user);
+        if (!isOwner) {
+            return res.status(403).json({ error: "No tienes permiso para modificar esta orden." });
+        }
+
         const estatusValidos = ['Pendiente', 'En Progreso', 'Finalizado'];
         if (!estatusValidos.includes(estatus)) {
             return res.status(400).json({ error: "Estatus no válido" });
@@ -128,10 +154,7 @@ const updateServiceStatus = async (req, res) => {
             return res.status(404).json({ error: "Servicio no encontrado en esta orden" });
         }
 
-        res.status(200).json({ 
-            message: "Estatus actualizado correctamente", 
-            data: result.rows[0] 
-        });
+        res.status(200).json({ message: "Estatus actualizado correctamente", data: result.rows[0] });
 
     } catch (err) {
         console.error("Error en updateServiceStatus:", err);
@@ -141,18 +164,19 @@ const updateServiceStatus = async (req, res) => {
 
 /**
  * POST /api/v1/ordenes/:id/servicios
- * Crea nuevos recursos subordinados (Agrega servicios a la orden).
  */
 const addServices = async (req, res) => {
     try {
         const { id } = req.params;
-        const { servicios } = req.body; // Esperamos un arreglo de IDs: [1, 2, 5]
+        const { servicios } = req.body;
+
+        const isOwner = await verifyOrderOwnership(id, req.user);
+        if (!isOwner) return res.status(403).json({ error: "No tienes permiso." });
 
         if (!servicios || servicios.length === 0) {
             return res.status(400).json({ error: "No se proporcionaron servicios para agregar" });
         }
 
-        // Magia SQL: Insertamos múltiples filas usando unnest para iterar el arreglo
         const query = `
             INSERT INTO orden_servicio (id_orden, id_servicio)
             SELECT $1, unnest($2::int[])
@@ -160,57 +184,46 @@ const addServices = async (req, res) => {
         `;
         const result = await pool.query(query, [id, servicios]);
 
-        res.status(201).json({ 
-            message: "Servicios agregados a la orden", 
-            data: result.rows 
-        });
+        res.status(201).json({ message: "Servicios agregados a la orden", data: result.rows });
 
     } catch (err) {
         console.error("Error en addServices:", err);
-        res.status(500).json({ error: "Error interno del servidor al agregar servicios" });
+        res.status(500).json({ error: "Error al agregar servicios" });
     }
 };
 
 /**
  * POST /api/v1/ordenes/:id/productos
- * Crea nuevos recursos subordinados (Agrega productos a la orden calculando su precio actual).
  */
 const addProducts = async (req, res) => {
     try {
         const { id } = req.params;
-        const { productos } = req.body; // Esperamos un arreglo de IDs: [3, 7]
+        const { productos } = req.body;
+
+        const isOwner = await verifyOrderOwnership(id, req.user);
+        if (!isOwner) return res.status(403).json({ error: "No tienes permiso." });
 
         if (!productos || productos.length === 0) {
             return res.status(400).json({ error: "No se proporcionaron productos para agregar" });
         }
 
-        // Magia SQL: Insertamos leyendo el precio_venta directamente de la tabla producto
         const query = `
             INSERT INTO orden_producto (id_orden, id_producto, cantidad, precio_unitario, subtotal)
-            SELECT 
-                $1, 
-                p.id, 
-                1, -- Por defecto agregamos 1 unidad
-                p.precio_venta, 
-                p.precio_venta * 1 
+            SELECT $1, p.id, 1, p.precio_venta, p.precio_venta * 1 
             FROM producto p
             WHERE p.id = ANY($2::int[])
             RETURNING *;
         `;
         const result = await pool.query(query, [id, productos]);
 
-        res.status(201).json({ 
-            message: "Productos agregados a la orden", 
-            data: result.rows 
-        });
+        res.status(201).json({ message: "Productos agregados a la orden", data: result.rows });
 
     } catch (err) {
         console.error("Error en addProducts:", err);
-        res.status(500).json({ error: "Error interno del servidor al agregar productos" });
+        res.status(500).json({ error: "Error al agregar productos" });
     }
 };
 
-// No olvides exportar las nuevas funciones actualizando el module.exports al final del archivo
 module.exports = {
     getOrdenes,
     updateServiceStatus,
