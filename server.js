@@ -9,6 +9,7 @@ const authenticateToken = require("./middleware/authMiddleware");
 const catalogRoutes = require("./routes/catalogRoutes"); 
 const clienteRoutes = require("./routes/clienteRoutes");
 const usuarioRoutes = require("./routes/usuarioRoutes.js");
+const ventaRoutes = require("./routes/ventaRoutes");
 
 const app = express();
 
@@ -38,6 +39,7 @@ app.use("/api/v1/ordenes", authenticateToken, ordenRoutes);
 app.use("/api/v1", authenticateToken, catalogRoutes);
 app.use("/api/v1/clientes", authenticateToken, clienteRoutes);
 app.use("/api/v1/usuarios", authenticateToken, usuarioRoutes);
+app.use("/api/v1/ventas", authenticateToken, ventaRoutes);
 
 const PORT = process.env.PORT || 3000;
 
