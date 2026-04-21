@@ -224,9 +224,56 @@ const addProducts = async (req, res) => {
     }
 };
 
+/**
+ * POST /api/v1/ordenes
+ * Transacción Maestra: Crea la orden y le asigna sus servicios iniciales.
+ */
+const createMasterOrder = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        
+        const { id_vehiculo, id_mecanico, kilometraje, fecha_inicio, notas_cliente, servicios } = req.body;
+        
+        // Limpiamos el kilometraje (ej. "45,000" -> 45000)
+        const kmLimpio = parseInt(kilometraje.toString().replace(/,/g, ''), 10) || 0;
+
+        // 1. Insertar la Orden
+        const insertOrdenQuery = `
+            INSERT INTO orden (id_vehiculo, id_mecanico, kilometraje, fecha_inicio, notas_cliente, total_orden)
+            VALUES ($1, $2, $3, $4, $5, 0.00)
+            RETURNING id;
+        `;
+        const ordenResult = await client.query(insertOrdenQuery, [
+            id_vehiculo, id_mecanico, kmLimpio, fecha_inicio, notas_cliente || null
+        ]);
+        const nuevaOrdenId = ordenResult.rows[0].id;
+
+        // 2. Insertar los Servicios asociados
+        if (servicios && servicios.length > 0) {
+            const insertServiciosQuery = `
+                INSERT INTO orden_servicio (id_orden, id_servicio, estatus)
+                SELECT $1, unnest($2::int[]), 'Pendiente'
+            `;
+            await client.query(insertServiciosQuery, [nuevaOrdenId, servicios]);
+        }
+
+        await client.query('COMMIT');
+        res.status(201).json({ message: "Orden maestra creada", data: { id: nuevaOrdenId } });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error("Error en createMasterOrder:", error);
+        res.status(500).json({ error: "Error al crear la orden maestra" });
+    } finally {
+        client.release();
+    }
+};
+
 module.exports = {
     getOrdenes,
     updateServiceStatus,
     addServices,
-    addProducts
+    addProducts, 
+    createMasterOrder
 };
