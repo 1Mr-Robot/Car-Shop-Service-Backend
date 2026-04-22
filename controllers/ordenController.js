@@ -27,12 +27,24 @@ const getOrdenes = async (req, res) => {
                 v.modelo AS "vehicleModel",
                 v.matricula AS "vehiclePlate",
                 v.color AS "vehicleColor",
+                v.niv AS "vehicleVIN",
                 c.nombre || ' ' || c.apellido_paterno AS "ownerName",
                 m.nombre || ' ' || m.apellido_paterno AS "mechanicName", 
                 o.kilometraje || ' km' AS "vehicleMileage",
+
+                -- Variables Legacy para OrderCard
                 TO_CHAR(o.fecha_inicio, 'HH12:MI AM') AS "since",
                 TO_CHAR(o.fecha_inicio, 'DD/MM/YYYY, HH12:MI AM') AS "time",
+
+                -- Variables Limpias para Detalles de Orden (Inicio y Fin)
+                TO_CHAR(o.fecha_inicio, 'DD/MM/YYYY') AS "startDate",
+                TO_CHAR(o.fecha_inicio, 'HH12:MI AM') AS "startTime",
+                TO_CHAR(o.fecha_fin, 'DD/MM/YYYY') AS "endDate",
+                TO_CHAR(o.fecha_fin, 'HH12:MI AM') AS "endTime",
+
                 o.notas_cliente AS "notes",
+
+                -- JSON Anidado 1: Servicios
                 COALESCE((
                     SELECT json_agg(
                         json_build_object(
@@ -45,6 +57,22 @@ const getOrdenes = async (req, res) => {
                     LEFT JOIN servicio s ON os.id_servicio = s.id
                     WHERE os.id_orden = o.id
                 ), '[]'::json) AS services
+
+                -- JSON Anidado 2: Productos Utilizados
+                COALESCE((
+                    SELECT json_agg(
+                        json_build_object(
+                            'id', p.id::TEXT,
+                            'name', p.nombre,
+                            'brand', p.marca,
+                            'quantity', op.cantidad
+                        )
+                    )
+                    FROM orden_producto op
+                    JOIN producto p ON op.id_producto = p.id
+                    WHERE op.id_orden = o.id
+                ), '[]'::json) AS products
+
             FROM orden o
             JOIN vehiculo v ON o.id_vehiculo = v.id
             JOIN cliente c ON v.id_cliente = c.id
@@ -90,7 +118,7 @@ const getOrdenes = async (req, res) => {
         if (sort === 'fecha_inicio_asc') {
             query += ` ORDER BY o.fecha_inicio ASC`;
         } else if (sort === 'fecha_fin_desc') {
-            query += ` ORDER BY o.fecha_fin DESC`;
+            query += ` ORDER BY o.fecha_fin DESC NULLS LAST`;
         } else {
             query += ` ORDER BY o.fecha_inicio DESC`; 
         }
