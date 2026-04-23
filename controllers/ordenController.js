@@ -25,7 +25,7 @@ const getOrdenes = async (req, res) => {
                 v.anio::TEXT AS "vehicleYear",
                 v.marca AS "vehicleBrand",
                 v.modelo AS "vehicleModel",
-                v.matricula AS "vehiclePlate",
+                v.matricula AS "vehiclePlate", 
                 v.color AS "vehicleColor",
                 v.niv AS "vehicleVIN",
                 c.nombre || ' ' || c.apellido_paterno AS "ownerName",
@@ -298,10 +298,43 @@ const createMasterOrder = async (req, res) => {
     }
 };
 
+/**
+ * PATCH /api/v1/ordenes/:id/finalizar
+ * Sella la orden con la fecha de finalización actual.
+ */
+const finalizeOrder = async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        // Verificamos RBAC
+        const isOwner = await verifyOrderOwnership(id, req.user);
+        if (!isOwner) return res.status(403).json({ error: "No tienes permiso." });
+
+        // Sellamos la orden con CURRENT_TIMESTAMP
+        const query = `
+            UPDATE orden 
+            SET fecha_fin = CURRENT_TIMESTAMP 
+            WHERE id = $1 
+            RETURNING *;
+        `;
+        const result = await pool.query(query, [id]);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: "Orden no encontrada." });
+        }
+
+        res.status(200).json({ message: "Orden finalizada exitosamente.", data: result.rows[0] });
+    } catch (err) {
+        console.error("Error en finalizeOrder:", err);
+        res.status(500).json({ error: "Error interno al finalizar la orden." });
+    }
+};
+
 module.exports = {
     getOrdenes,
     updateServiceStatus,
     addServices,
     addProducts, 
-    createMasterOrder
+    createMasterOrder,
+    finalizeOrder
 };

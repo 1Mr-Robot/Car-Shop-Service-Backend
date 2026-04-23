@@ -15,4 +15,5 @@ router.patch("/:id/servicios/:servicioId", ordenController.updateServiceStatus);
 router.post("/:id/servicios", ordenController.addServices);
 router.post("/:id/productos", ordenController.addProducts);
 router.post("/", ordenController.createMasterOrder);
+router.patch("/:id/finalizar", ordenController.finalizeOrder);
 module.exports = router;
