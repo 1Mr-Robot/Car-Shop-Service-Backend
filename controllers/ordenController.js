@@ -56,7 +56,7 @@ const getOrdenes = async (req, res) => {
                     FROM orden_servicio os
                     LEFT JOIN servicio s ON os.id_servicio = s.id
                     WHERE os.id_orden = o.id
-                ), '[]'::json) AS services
+                ), '[]'::json) AS services,
 
                 -- JSON Anidado 2: Productos Utilizados
                 COALESCE((
