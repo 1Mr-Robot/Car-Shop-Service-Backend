@@ -310,10 +310,10 @@ const finalizeOrder = async (req, res) => {
         const isOwner = await verifyOrderOwnership(id, req.user);
         if (!isOwner) return res.status(403).json({ error: "No tienes permiso." });
 
-        // Sellamos la orden con CURRENT_TIMESTAMP
+        // Sellamos la orden convirtiendo el tiempo UTC del servidor a tiempo de la Ciudad de México/Centro
         const query = `
             UPDATE orden 
-            SET fecha_fin = CURRENT_TIMESTAMP 
+            SET fecha_fin = (NOW() AT TIME ZONE 'America/Mexico_City')
             WHERE id = $1 
             RETURNING *;
         `;
@@ -330,11 +330,44 @@ const finalizeOrder = async (req, res) => {
     }
 };
 
+/**
+ * PUT /api/v1/ordenes/:id/iniciar
+ * Actualiza todos los servicios 'Pendientes' de una orden a 'En Progreso'.
+ */
+const startAllServices = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Validar propiedad
+        const isOwner = await verifyOrderOwnership(id, req.user);
+        if (!isOwner) return res.status(403).json({ error: "No tienes permiso para modificar esta orden." });
+
+        const query = `
+            UPDATE orden_servicio 
+            SET estatus = 'En Progreso' 
+            WHERE id_orden = $1 AND estatus = 'Pendiente' 
+            RETURNING *;
+        `;
+        const result = await pool.query(query, [id]);
+
+        if (result.rowCount === 0) {
+            // Podría ser que ya todos estén en progreso o no haya servicios
+            return res.status(400).json({ error: "No hay servicios pendientes para iniciar en esta orden." });
+        }
+
+        res.status(200).json({ message: "Todos los servicios iniciados correctamente.", data: result.rows });
+    } catch (err) {
+        console.error("Error en startAllServices:", err);
+        res.status(500).json({ error: "Error interno del servidor al iniciar servicios." });
+    }
+};
+
 module.exports = {
     getOrdenes,
     updateServiceStatus,
     addServices,
     addProducts, 
     createMasterOrder,
-    finalizeOrder
+    finalizeOrder, 
+    startAllServices
 };

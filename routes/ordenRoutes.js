@@ -16,4 +16,5 @@ router.post("/:id/servicios", ordenController.addServices);
 router.post("/:id/productos", ordenController.addProducts);
 router.post("/", ordenController.createMasterOrder);
 router.patch("/:id/finalizar", ordenController.finalizeOrder);
+router.put("/:id/iniciar", ordenController.startAllServices);
 module.exports = router;
