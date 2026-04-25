@@ -13,8 +13,12 @@ router.get("/", ordenController.getOrdenes);
 // Rutas Interactivas (PATCH y POST)
 router.patch("/:id/servicios/:servicioId", ordenController.updateServiceStatus);
 router.post("/:id/servicios", ordenController.addServices);
+
 router.post("/:id/productos", ordenController.addProducts);
 router.post("/", ordenController.createMasterOrder);
+
 router.patch("/:id/finalizar", ordenController.finalizeOrder);
 router.put("/:id/iniciar", ordenController.startAllServices);
+
+router.post("/:id/servicios-personalizados", ordenController.addCustomService);
 module.exports = router;

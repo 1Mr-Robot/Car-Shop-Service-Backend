@@ -8,17 +8,13 @@ const pool = require("../db");
  */
 const getOrdenes = async (req, res) => {
     try {
-        // 1. Extraer Query Parameters (Ignoramos mecanico_id por seguridad, usaremos req.user)
         const { estatus_servicio, sort, limit, page, mecanico_id } = req.query;
-        const usuarioActual = req.user; // Inyectado por authMiddleware
+        const usuarioActual = req.user; 
 
-        // Configuraciones por defecto para Paginación
         const limitNum = parseInt(limit) || 10;
         const pageNum = parseInt(page) || 1;
         const offset = (pageNum - 1) * limitNum;
 
-        // 2. Construcción Dinámica de la Consulta SQL
-        // SE AÑADIÓ: Un JOIN a usuario 'm' para obtener mechanicName (Requerido por Frontend para Recepcionista)
         let query = `
             SELECT 
                 o.id::TEXT,
@@ -32,11 +28,9 @@ const getOrdenes = async (req, res) => {
                 m.nombre || ' ' || m.apellido_paterno AS "mechanicName", 
                 o.kilometraje || ' km' AS "vehicleMileage",
 
-                -- Variables Legacy para OrderCard
                 TO_CHAR(o.fecha_inicio, 'HH12:MI AM') AS "since",
                 TO_CHAR(o.fecha_inicio, 'DD/MM/YYYY, HH12:MI AM') AS "time",
 
-                -- Variables Limpias para Detalles de Orden (Inicio y Fin)
                 TO_CHAR(o.fecha_inicio, 'DD/MM/YYYY') AS "startDate",
                 TO_CHAR(o.fecha_inicio, 'HH12:MI AM') AS "startTime",
                 TO_CHAR(o.fecha_fin, 'DD/MM/YYYY') AS "endDate",
@@ -44,7 +38,6 @@ const getOrdenes = async (req, res) => {
 
                 o.notas_cliente AS "notes",
 
-                -- JSON Anidado 1: Servicios
                 COALESCE((
                     SELECT json_agg(
                         json_build_object(
@@ -58,7 +51,6 @@ const getOrdenes = async (req, res) => {
                     WHERE os.id_orden = o.id
                 ), '[]'::json) AS services,
 
-                -- JSON Anidado 2: Productos Utilizados
                 COALESCE((
                     SELECT json_agg(
                         json_build_object(
@@ -83,18 +75,11 @@ const getOrdenes = async (req, res) => {
         const queryParams = [];
         let paramIndex = 1;
 
-        // ==========================================
-        // 3. CAPA DE SEGURIDAD RBAC (Role-Based Access Control)
-        // ==========================================
         if (usuarioActual.rol === 'Mecánico') {
-            // Regla Estricta: Un mecánico SOLO ve sus propias órdenes. 
-            // Usamos el ID interno de Postgres que sacamos del middleware de forma segura.
             query += ` AND o.id_mecanico = $${paramIndex}`;
             queryParams.push(usuarioActual.id);
             paramIndex++;
         } else if (usuarioActual.rol === 'Recepcionista') {
-            // Regla Administrador: Ve todo. 
-            // Opcional: Si el recepcionista quiere filtrar por un mecánico en particular desde la UI
             if (mecanico_id) {
                 query += ` AND m.firebase_uid = $${paramIndex}`;
                 queryParams.push(mecanico_id);
@@ -102,9 +87,6 @@ const getOrdenes = async (req, res) => {
             }
         }
 
-        // ==========================================
-        // 4. Filtros Generales
-        // ==========================================
         if (estatus_servicio) {
             query += ` AND EXISTS (
                 SELECT 1 FROM orden_servicio os2 
@@ -114,7 +96,6 @@ const getOrdenes = async (req, res) => {
             paramIndex++;
         }
 
-        // Ordenamiento (Sorting)
         if (sort === 'fecha_inicio_asc') {
             query += ` ORDER BY o.fecha_inicio ASC`;
         } else if (sort === 'fecha_fin_desc') {
@@ -123,7 +104,6 @@ const getOrdenes = async (req, res) => {
             query += ` ORDER BY o.fecha_inicio DESC`; 
         }
 
-        // Paginación (Limit & Offset)
         query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
         queryParams.push(limitNum, offset);
 
@@ -140,26 +120,18 @@ const getOrdenes = async (req, res) => {
     }
 };
 
-/**
- * Función auxiliar de seguridad: Verifica si un mecánico tiene permiso para modificar esta orden
- */
 const verifyOrderOwnership = async (ordenId, usuarioActual) => {
-    if (usuarioActual.rol === 'Recepcionista') return true; // El admin puede tocar todo
-    
+    if (usuarioActual.rol === 'Recepcionista') return true; 
     const query = `SELECT id FROM orden WHERE id = $1 AND id_mecanico = $2`;
     const result = await pool.query(query, [ordenId, usuarioActual.id]);
-    return result.rowCount > 0; // true si es suya, false si intenta hackear/tocar otra
+    return result.rowCount > 0; 
 };
 
-/**
- * PATCH /api/v1/ordenes/:id/servicios/:servicioId
- */
 const updateServiceStatus = async (req, res) => {
     try {
         const { id, servicioId } = req.params;
         const { estatus } = req.body;
 
-        // Validar propiedad de la orden
         const isOwner = await verifyOrderOwnership(id, req.user);
         if (!isOwner) {
             return res.status(403).json({ error: "No tienes permiso para modificar esta orden." });
@@ -190,9 +162,6 @@ const updateServiceStatus = async (req, res) => {
     }
 };
 
-/**
- * POST /api/v1/ordenes/:id/servicios
- */
 const addServices = async (req, res) => {
     try {
         const { id } = req.params;
@@ -221,52 +190,146 @@ const addServices = async (req, res) => {
 };
 
 /**
- * POST /api/v1/ordenes/:id/productos
+ * [REFACTOR] POST /api/v1/ordenes/:id/servicios-personalizados
+ * Implementa Transacción: Inserta el servicio y suma el costo al total_orden.
+ */
+const addCustomService = async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        
+        const { id } = req.params;
+        const { descripcion_personalizada, precio_personalizado } = req.body;
+
+        const isOwner = await verifyOrderOwnership(id, req.user); 
+        if (!isOwner) {
+            await client.query('ROLLBACK');
+            return res.status(403).json({ error: "No tienes permisos."});
+        }
+
+        if (!descripcion_personalizada || precio_personalizado == null) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: "La descripción y el precio son obligatorios para un servicio personalizado." });
+        }
+
+        // 1. Insertamos el servicio
+        const insertQuery = `
+            INSERT INTO orden_servicio (id_orden, descripcion_personalizada, precio_personalizado, estatus)
+            VALUES ($1, $2, $3, 'Pendiente')
+            RETURNING *;
+        `;
+        const result = await client.query(insertQuery, [id, descripcion_personalizada, precio_personalizado]);
+
+        // 2. Sumamos el costo al total_orden de manera segura
+        const updateOrderQuery = `
+            UPDATE orden 
+            SET total_orden = total_orden + $1 
+            WHERE id = $2;
+        `;
+        await client.query(updateOrderQuery, [precio_personalizado, id]);
+
+        await client.query('COMMIT');
+        res.status(201).json({ message: "Servicio personalizado añadido y total actualizado.", data: result.rows[0] });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error("Error en addCustomService:", err);
+        res.status(500).json({ error: "Error al crear el servicio personalizado." });
+    } finally {
+        client.release();
+    }
+};
+
+/**
+ * [REFACTOR] POST /api/v1/ordenes/:id/productos
+ * Añade productos, resta stock, calcula subtotales, y consolida la suma en el total_orden.
  */
 const addProducts = async (req, res) => {
+    const client = await pool.connect();
     try {
         const { id } = req.params;
         const { productos } = req.body;
 
         const isOwner = await verifyOrderOwnership(id, req.user);
-        if (!isOwner) return res.status(403).json({ error: "No tienes permiso." });
-
-        if (!productos || productos.length === 0) {
-            return res.status(400).json({ error: "No se proporcionaron productos para agregar" });
+        if (!isOwner) {
+            return res.status(403).json({ error: "No tienes permiso." });
         }
 
-        const query = `
-            INSERT INTO orden_producto (id_orden, id_producto, cantidad, precio_unitario, subtotal)
-            SELECT $1, p.id, 1, p.precio_venta, p.precio_venta * 1 
-            FROM producto p
-            WHERE p.id = ANY($2::int[])
-            RETURNING *;
-        `;
-        const result = await pool.query(query, [id, productos]);
+        if (!productos || !Array.isArray(productos) || productos.length === 0) {
+            return res.status(400).json({ error: "La lista de productos no es válida." });
+        }
 
-        res.status(201).json({ message: "Productos agregados a la orden", data: result.rows });
+        await client.query('BEGIN');
+        const insertedProducts = [];
+        let totalAmountToAdd = 0; // Acumulador de costos
+
+        for (const item of productos) {
+            const { id_producto, cantidad } = item;
+
+            if (!id_producto || !cantidad || cantidad <= 0) {
+                throw new Error("Datos de producto inválidos en la petición.");
+            }
+
+            const stockResult = await client.query(
+                `SELECT nombre, cantidad_stock, precio_venta FROM producto WHERE id = $1 FOR UPDATE`,
+                [id_producto]
+            );
+
+            if (stockResult.rowCount === 0) {
+                throw new Error(`El producto con ID ${id_producto} no existe en el catálogo.`);
+            }
+
+            const productoDb = stockResult.rows[0];
+
+            if (productoDb.cantidad_stock < cantidad) {
+                throw new Error(`Stock insuficiente para "${productoDb.nombre}". Solo quedan ${productoDb.cantidad_stock} unidades.`);
+            }
+
+            await client.query(
+                `UPDATE producto SET cantidad_stock = cantidad_stock - $1 WHERE id = $2`,
+                [cantidad, id_producto]
+            );
+
+            // Calcular el subtotal y sumar al acumulador global
+            const subtotal = productoDb.precio_venta * cantidad;
+            totalAmountToAdd += subtotal;
+
+            const insertResult = await client.query(
+                `INSERT INTO orden_producto (id_orden, id_producto, cantidad, precio_unitario, subtotal)
+                 VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+                [id, id_producto, cantidad, productoDb.precio_venta, subtotal]
+            );
+
+            insertedProducts.push(insertResult.rows[0]);
+        }
+
+        // Si se agregaron productos, sumamos el valor completo a la orden maestra en un solo movimiento
+        if (totalAmountToAdd > 0) {
+            await client.query(
+                `UPDATE orden SET total_orden = total_orden + $1 WHERE id = $2`,
+                [totalAmountToAdd, id]
+            );
+        }
+
+        await client.query('COMMIT');
+        res.status(201).json({ message: "Productos añadidos, stock descontado y total actualizado.", data: insertedProducts });
 
     } catch (err) {
-        console.error("Error en addProducts:", err);
-        res.status(500).json({ error: "Error al agregar productos" });
+        await client.query('ROLLBACK');
+        console.error("Error transaccional en addProducts:", err);
+        res.status(400).json({ error: err.message || "Error al procesar el inventario." });
+    } finally {
+        client.release();
     }
 };
 
-/**
- * POST /api/v1/ordenes
- * Transacción Maestra: Crea la orden y le asigna sus servicios iniciales.
- */
 const createMasterOrder = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         
         const { id_vehiculo, id_mecanico, kilometraje, fecha_inicio, notas_cliente, servicios } = req.body;
-        
-        // Limpiamos el kilometraje (ej. "45,000" -> 45000)
         const kmLimpio = parseInt(kilometraje.toString().replace(/,/g, ''), 10) || 0;
 
-        // 1. Insertar la Orden
         const insertOrdenQuery = `
             INSERT INTO orden (id_vehiculo, id_mecanico, kilometraje, fecha_inicio, notas_cliente, total_orden)
             VALUES ($1, $2, $3, $4, $5, 0.00)
@@ -277,7 +340,6 @@ const createMasterOrder = async (req, res) => {
         ]);
         const nuevaOrdenId = ordenResult.rows[0].id;
 
-        // 2. Insertar los Servicios asociados
         if (servicios && servicios.length > 0) {
             const insertServiciosQuery = `
                 INSERT INTO orden_servicio (id_orden, id_servicio, estatus)
@@ -298,19 +360,13 @@ const createMasterOrder = async (req, res) => {
     }
 };
 
-/**
- * PATCH /api/v1/ordenes/:id/finalizar
- * Sella la orden con la fecha de finalización actual.
- */
 const finalizeOrder = async (req, res) => {
     try {
         const { id } = req.params;
         
-        // Verificamos RBAC
         const isOwner = await verifyOrderOwnership(id, req.user);
         if (!isOwner) return res.status(403).json({ error: "No tienes permiso." });
 
-        // Sellamos la orden convirtiendo el tiempo UTC del servidor a tiempo de la Ciudad de México/Centro
         const query = `
             UPDATE orden 
             SET fecha_fin = (NOW() AT TIME ZONE 'America/Mexico_City')
@@ -330,15 +386,10 @@ const finalizeOrder = async (req, res) => {
     }
 };
 
-/**
- * PUT /api/v1/ordenes/:id/iniciar
- * Actualiza todos los servicios 'Pendientes' de una orden a 'En Progreso'.
- */
 const startAllServices = async (req, res) => {
     try {
         const { id } = req.params;
 
-        // Validar propiedad
         const isOwner = await verifyOrderOwnership(id, req.user);
         if (!isOwner) return res.status(403).json({ error: "No tienes permiso para modificar esta orden." });
 
@@ -351,7 +402,6 @@ const startAllServices = async (req, res) => {
         const result = await pool.query(query, [id]);
 
         if (result.rowCount === 0) {
-            // Podría ser que ya todos estén en progreso o no haya servicios
             return res.status(400).json({ error: "No hay servicios pendientes para iniciar en esta orden." });
         }
 
@@ -366,6 +416,7 @@ module.exports = {
     getOrdenes,
     updateServiceStatus,
     addServices,
+    addCustomService,
     addProducts, 
     createMasterOrder,
     finalizeOrder, 
