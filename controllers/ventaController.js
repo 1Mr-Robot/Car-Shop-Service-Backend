@@ -100,6 +100,57 @@ const createVenta = async (req, res) => {
     }
 };
 
+/**
+ * GET /api/v1/ventas
+ * Obtiene todas las ventas con sus detalles (productos).
+ * Accessible por cualquier usuario autenticado.
+ */
+const getAllVentas = async (req, res) => {
+    try {
+        // Consultamos las ventas más recientes primero
+        const ventasRes = await pool.query(`
+            SELECT 
+                v.id,
+                v.total,
+                v.fecha,
+                u.nombre AS usuario_nombre,
+                u.apellido_paterno AS usuario_apellido
+            FROM venta v
+            JOIN usuario u ON v.id_usuario = u.id
+            ORDER BY v.fecha DESC
+        `);
+
+        const ventas = ventasRes.rows;
+
+        // Para cada venta, obtenemos sus detalles
+        for (const venta of ventas) {
+            const detallesRes = await pool.query(`
+                SELECT 
+                    dv.cantidad,
+                    dv.precio_unitario,
+                    dv.subtotal,
+                    p.nombre AS producto_nombre,
+                    p.marca AS producto_marca
+                FROM detalle_venta dv
+                JOIN producto p ON dv.id_producto = p.id
+                WHERE dv.id_venta = $1
+            `, [venta.id]);
+
+            venta.productos = detallesRes.rows;
+            // Formateamos la fecha como DD/MM/YYYY
+            const fechaDate = new Date(venta.fecha);
+            venta.fecha = `${String(fechaDate.getDate()).padStart(2, '0')}/${String(fechaDate.getMonth() + 1).padStart(2, '0')}/${fechaDate.getFullYear()}`;
+        }
+
+        res.json({ data: ventas });
+
+    } catch (error) {
+        console.error("[Venta Controller] Error al obtener ventas:", error.message);
+        res.status(500).json({ error: "Error interno del servidor al obtener ventas." });
+    }
+};
+
 module.exports = {
-    createVenta
+    createVenta,
+    getAllVentas
 };
