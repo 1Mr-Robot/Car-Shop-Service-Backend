@@ -11,6 +11,7 @@ const clienteRoutes = require("./routes/clienteRoutes");
 const usuarioRoutes = require("./routes/usuarioRoutes.js");
 const ventaRoutes = require("./routes/ventaRoutes");
 const vehiculoRoutes = require("./routes/vehiculoRoutes");
+const productoRoutes = require("./routes/productoRoutes");
 
 const app = express();
 
@@ -40,6 +41,7 @@ app.use("/api/v1/ordenes", authenticateToken, ordenRoutes);
 app.use("/api/v1", authenticateToken, catalogRoutes);
 app.use("/api/v1/clientes", authenticateToken, clienteRoutes);
 app.use("/api/v1/vehiculos", authenticateToken, vehiculoRoutes);
+app.use("/api/v1/productos", authenticateToken, productoRoutes);
 app.use("/api/v1/usuarios", authenticateToken, usuarioRoutes);
 app.use("/api/v1/ventas", authenticateToken, ventaRoutes);
 
