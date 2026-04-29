@@ -13,6 +13,9 @@ router.get("/", ordenController.getOrdenes);
 // GET /api/v1/ordenes/:id/servicios -> Obtener servicios de una orden
 router.get("/:id/servicios", ordenController.getOrderServices);
 
+// GET /api/v1/ordenes/:id/productos -> Obtener productos de una orden
+router.get("/:id/productos", ordenController.getOrderProducts);
+
 // Rutas Interactivas (PATCH y POST)
 router.patch("/:id/servicios/:servicioId", ordenController.updateServiceStatus);
 router.post("/:id/servicios", ordenController.addServices);

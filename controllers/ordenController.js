@@ -277,8 +277,7 @@ const addProducts = async (req, res) => {
         }
 
         await client.query('BEGIN');
-        const insertedProducts = [];
-        let totalAmountToAdd = 0; // Acumulador de costos
+        let totalAmountToAdd = 0;
 
         for (const item of productos) {
             const { id_producto, cantidad } = item;
@@ -298,26 +297,59 @@ const addProducts = async (req, res) => {
 
             const productoDb = stockResult.rows[0];
 
-            if (productoDb.cantidad_stock < cantidad) {
-                throw new Error(`Stock insuficiente para "${productoDb.nombre}". Solo quedan ${productoDb.cantidad_stock} unidades.`);
+            // Verificar si el producto ya está en la orden
+            const existingProduct = await client.query(
+                `SELECT id, cantidad FROM orden_producto WHERE id_orden = $1 AND id_producto = $2`,
+                [id, id_producto]
+            );
+
+            if (existingProduct.rowCount > 0) {
+                // El producto ya existe, actualizar cantidad
+                const existingQty = existingProduct.rows[0].cantidad;
+                const newQty = existingQty + cantidad;
+
+                if (productoDb.cantidad_stock < cantidad) {
+                    throw new Error(`Stock insuficiente para "${productoDb.nombre}". Solo quedan ${productoDb.cantidad_stock} unidades.`);
+                }
+
+                const newSubtotal = productoDb.precio_venta * newQty;
+                const oldSubtotal = productoDb.precio_venta * existingQty;
+                const subtotalDiff = newSubtotal - oldSubtotal;
+
+                // Actualizar cantidad, precio y subtotal
+                await client.query(
+                    `UPDATE orden_producto SET cantidad = $1, precio_unitario = $2, subtotal = $3 WHERE id_orden = $4 AND id_producto = $5`,
+                    [newQty, productoDb.precio_venta, newSubtotal, id, id_producto]
+                );
+
+                // Restar solo la cantidad adicional del stock
+                await client.query(
+                    `UPDATE producto SET cantidad_stock = cantidad_stock - $1 WHERE id = $2`,
+                    [cantidad, id_producto]
+                );
+
+                // Sumar la diferencia al total
+                totalAmountToAdd += subtotalDiff;
+            } else {
+                // Producto nuevo, insertar
+                if (productoDb.cantidad_stock < cantidad) {
+                    throw new Error(`Stock insuficiente para "${productoDb.nombre}". Solo quedan ${productoDb.cantidad_stock} unidades.`);
+                }
+
+                await client.query(
+                    `UPDATE producto SET cantidad_stock = cantidad_stock - $1 WHERE id = $2`,
+                    [cantidad, id_producto]
+                );
+
+                const subtotal = productoDb.precio_venta * cantidad;
+                totalAmountToAdd += subtotal;
+
+                await client.query(
+                    `INSERT INTO orden_producto (id_orden, id_producto, cantidad, precio_unitario, subtotal)
+                     VALUES ($1, $2, $3, $4, $5)`,
+                    [id, id_producto, cantidad, productoDb.precio_venta, subtotal]
+                );
             }
-
-            await client.query(
-                `UPDATE producto SET cantidad_stock = cantidad_stock - $1 WHERE id = $2`,
-                [cantidad, id_producto]
-            );
-
-            // Calcular el subtotal y sumar al acumulador global
-            const subtotal = productoDb.precio_venta * cantidad;
-            totalAmountToAdd += subtotal;
-
-            const insertResult = await client.query(
-                `INSERT INTO orden_producto (id_orden, id_producto, cantidad, precio_unitario, subtotal)
-                 VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-                [id, id_producto, cantidad, productoDb.precio_venta, subtotal]
-            );
-
-            insertedProducts.push(insertResult.rows[0]);
         }
 
         // Si se agregaron productos, sumamos el valor completo a la orden maestra en un solo movimiento
@@ -329,7 +361,7 @@ const addProducts = async (req, res) => {
         }
 
         await client.query('COMMIT');
-        res.status(201).json({ message: "Productos añadidos, stock descontado y total actualizado.", data: insertedProducts });
+        res.status(201).json({ message: "Productos añadidos, stock descontado y total actualizado." });
 
     } catch (err) {
         await client.query('ROLLBACK');
@@ -455,6 +487,30 @@ const getOrderServices = async (req, res) => {
     }
 };
 
+/**
+ * GET /api/v1/ordenes/:id/productos
+ * Obtiene los productos asociados a una orden
+ */
+const getOrderProducts = async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const query = `
+            SELECT op.id, op.id_producto, p.nombre, p.marca, p.sku, p.precio_venta, op.cantidad, op.subtotal
+            FROM orden_producto op
+            LEFT JOIN producto p ON op.id_producto = p.id
+            WHERE op.id_orden = $1
+            ORDER BY op.id ASC;
+        `;
+        const result = await pool.query(query, [id]);
+
+        res.status(200).json({ data: result.rows });
+    } catch (err) {
+        console.error("Error en getOrderProducts:", err);
+        res.status(500).json({ error: "Error al obtener los productos de la orden" });
+    }
+};
+
 module.exports = {
     getOrdenes,
     updateServiceStatus,
@@ -464,5 +520,6 @@ module.exports = {
     createMasterOrder,
     finalizeOrder, 
     startAllServices,
-    getOrderServices
+    getOrderServices,
+    getOrderProducts
 };
