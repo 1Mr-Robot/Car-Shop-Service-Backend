@@ -327,16 +327,17 @@ const createMasterOrder = async (req, res) => {
     try {
         await client.query('BEGIN');
         
-        const { id_vehiculo, id_mecanico, kilometraje, fecha_inicio, notas_cliente, servicios } = req.body;
+        const { id_vehiculo, id_mecanico, kilometraje, fecha_inicio, notas_cliente, servicios, total_orden } = req.body;
         const kmLimpio = parseInt(kilometraje.toString().replace(/,/g, ''), 10) || 0;
+        const precioOrden = parseFloat(total_orden) || 0.00;
 
         const insertOrdenQuery = `
             INSERT INTO orden (id_vehiculo, id_mecanico, kilometraje, fecha_inicio, notas_cliente, total_orden)
-            VALUES ($1, $2, $3, $4, $5, 0.00)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id;
         `;
         const ordenResult = await client.query(insertOrdenQuery, [
-            id_vehiculo, id_mecanico, kmLimpio, fecha_inicio, notas_cliente || null
+            id_vehiculo, id_mecanico, kmLimpio, fecha_inicio, notas_cliente || null, precioOrden
         ]);
         const nuevaOrdenId = ordenResult.rows[0].id;
 
