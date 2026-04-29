@@ -2,7 +2,10 @@ const pool = require("../db");
 
 const getProductos = async (req, res) => {
     try {
-        const query = `
+        const limit = parseInt(req.query.limit) || 100;
+        const activo = req.query.activo !== 'false';
+        
+        let query = `
             SELECT 
                 id::TEXT,
                 sku,
@@ -16,9 +19,16 @@ const getProductos = async (req, res) => {
                 precio_compra,
                 precio_venta
             FROM producto
-            ORDER BY nombre ASC;
+            WHERE 1=1
         `;
-        const result = await pool.query(query);
+        
+        if (activo) {
+            query += ` AND activo = true`;
+        }
+        
+        query += ` ORDER BY nombre ASC LIMIT $1`;
+        
+        const result = await pool.query(query, [limit]);
         res.status(200).json({ data: result.rows });
     } catch (error) {
         console.error("Error en getProductos:", error);
