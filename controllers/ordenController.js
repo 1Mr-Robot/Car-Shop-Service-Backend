@@ -174,12 +174,30 @@ const addServices = async (req, res) => {
             return res.status(400).json({ error: "No se proporcionaron servicios para agregar" });
         }
 
+        // Filtrar servicios que ya existen en la orden
+        const checkQuery = `
+            SELECT id_servicio FROM orden_servicio 
+            WHERE id_orden = $1 AND id_servicio = ANY($2::int[])
+        `;
+        const existingResult = await pool.query(checkQuery, [id, servicios]);
+        const existingIds = new Set(existingResult.rows.map(r => r.id_servicio));
+        
+        const newServices = servicios.filter(sid => !existingIds.has(sid));
+
+        if (newServices.length === 0) {
+            return res.status(400).json({ error: "Todos los servicios seleccionados ya existen en esta orden" });
+        }
+
+        if (newServices.length < servicios.length) {
+            return res.status(400).json({ error: "Algunos servicios ya existen en esta orden", duplicates: true });
+        }
+
         const query = `
             INSERT INTO orden_servicio (id_orden, id_servicio)
             SELECT $1, unnest($2::int[])
             RETURNING *;
         `;
-        const result = await pool.query(query, [id, servicios]);
+        const result = await pool.query(query, [id, newServices]);
 
         res.status(201).json({ message: "Servicios agregados a la orden", data: result.rows });
 
@@ -413,6 +431,30 @@ const startAllServices = async (req, res) => {
     }
 };
 
+/**
+ * GET /api/v1/ordenes/:id/servicios
+ * Obtiene los servicios asociados a una orden
+ */
+const getOrderServices = async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const query = `
+            SELECT os.id, os.id_servicio, s.nombre, s.descripcion, s.precio_mano_obra, os.estatus
+            FROM orden_servicio os
+            LEFT JOIN servicio s ON os.id_servicio = s.id
+            WHERE os.id_orden = $1
+            ORDER BY os.id ASC;
+        `;
+        const result = await pool.query(query, [id]);
+
+        res.status(200).json({ data: result.rows });
+    } catch (err) {
+        console.error("Error en getOrderServices:", err);
+        res.status(500).json({ error: "Error al obtener los servicios de la orden" });
+    }
+};
+
 module.exports = {
     getOrdenes,
     updateServiceStatus,
@@ -421,5 +463,6 @@ module.exports = {
     addProducts, 
     createMasterOrder,
     finalizeOrder, 
-    startAllServices
+    startAllServices,
+    getOrderServices
 };

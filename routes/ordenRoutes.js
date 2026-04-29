@@ -10,6 +10,9 @@ const ordenController = require("../controllers/ordenController");
 // GET /api/v1/ordenes -> Obtener lista de órdenes (soporta filtros, sort y paginación)
 router.get("/", ordenController.getOrdenes);
 
+// GET /api/v1/ordenes/:id/servicios -> Obtener servicios de una orden
+router.get("/:id/servicios", ordenController.getOrderServices);
+
 // Rutas Interactivas (PATCH y POST)
 router.patch("/:id/servicios/:servicioId", ordenController.updateServiceStatus);
 router.post("/:id/servicios", ordenController.addServices);
